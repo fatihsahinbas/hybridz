@@ -1,0 +1,142 @@
+use crate::analyzer;
+use crate::entropy::huffman;
+
+// Format: [pipeline_id: 1B] [original_len: 4B LE] [lengths: 256B] [huffman_payload]
+
+pub fn compress(data: &[u8]) -> Result<Vec<u8>, String> {
+    if data.is_empty() {
+        return Ok(vec![0x00]);
+    }
+
+    let analysis = analyzer::analyze(data);
+    let (transformed, pipeline_id) = analyzer::apply_pipeline(data, &analysis.pipeline);
+
+    let original_len = transformed.len() as u32;
+    let (huff_bytes, table) = huffman::encode(&transformed);
+    let lengths = huffman::serialize_table(&table);
+
+    let mut output = Vec::with_capacity(1 + 4 + 256 + huff_bytes.len());
+    output.push(pipeline_id);
+    output.extend_from_slice(&original_len.to_le_bytes());
+    output.extend_from_slice(&lengths);
+    output.extend_from_slice(&huff_bytes);
+
+    Ok(output)
+}
+
+pub fn decompress(data: &[u8]) -> Result<Vec<u8>, String> {
+    if data.is_empty() {
+        return Err("Boş veri".to_string());
+    }
+
+    let pipeline_id = data[0];
+
+    if data.len() == 1 {
+        return Ok(Vec::new());
+    }
+
+    if data.len() < 1 + 4 + 256 {
+        return Err("Veri çok kısa: header eksik".to_string());
+    }
+
+    let original_len = u32::from_le_bytes([data[1], data[2], data[3], data[4]]) as usize;
+    let lengths = &data[5..261];
+    let compressed = &data[261..];
+
+    let table = huffman::deserialize_table(lengths);
+    let transformed = huffman::decode(compressed, &table, original_len);
+
+    let original = analyzer::reverse_pipeline(&transformed, pipeline_id);
+
+    Ok(original)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compress_decompress_text() {
+        let original = b"the cat sat on the mat the cat sat on the mat";
+        let compressed = compress(original).expect("compress başarısız");
+        let recovered = decompress(&compressed).expect("decompress başarısız");
+        assert_eq!(original.to_vec(), recovered);
+    }
+
+    #[test]
+    fn test_compress_decompress_repetitive() {
+        let original = vec![0xABu8; 200];
+        let compressed = compress(&original).expect("compress başarısız");
+        let recovered = decompress(&compressed).expect("decompress başarısız");
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn test_compress_decompress_binary() {
+        let original: Vec<u8> = (0u8..=255).cycle().take(512).collect();
+        let compressed = compress(&original).expect("compress başarısız");
+        let recovered = decompress(&compressed).expect("decompress başarısız");
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn test_compress_empty() {
+        let original = b"";
+        let compressed = compress(original).expect("compress başarısız");
+        assert_eq!(compressed.len(), 1);
+        let recovered = decompress(&compressed).expect("decompress başarısız");
+        assert_eq!(recovered, b"");
+    }
+
+    #[test]
+    fn test_compression_ratio_text() {
+        let original = b"the cat sat on the mat the cat sat on the mat the cat sat on the mat";
+        let compressed = compress(original).expect("compress başarısız");
+        let recovered = decompress(&compressed).expect("decompress başarısız");
+        assert_eq!(original.to_vec(), recovered);
+    }
+
+    #[test]
+    fn test_large_file_roundtrip() {
+        let data = std::fs::read("../corpus/alice29.txt")
+            .unwrap_or_else(|_| std::fs::read("corpus/alice29.txt").unwrap());
+        let compressed = compress(&data).unwrap();
+        let recovered = decompress(&compressed).unwrap();
+        assert_eq!(data, recovered);
+    }
+
+    #[test]
+    fn test_compression_ratio_repetitive() {
+        let original = vec![0x42u8; 1024];
+        let compressed = compress(&original).expect("compress başarısız");
+        assert!(compressed.len() < original.len());
+        let recovered = decompress(&compressed).expect("decompress başarısız");
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn test_bwtmtf_huffman_roundtrip() {
+        use crate::transforms::{bwt, mtf};
+
+        let data = std::fs::read("../corpus/alice29.txt")
+            .unwrap_or_else(|_| std::fs::read("corpus/alice29.txt").unwrap());
+
+        let bwt_result = bwt::encode(&data);
+        let idx = bwt_result.original_index as u32;
+        let mut transformed = Vec::new();
+        transformed.extend_from_slice(&idx.to_le_bytes());
+        transformed.extend(mtf::encode(&bwt_result.transformed));
+
+        let (huff_bytes, table) = crate::entropy::huffman::encode(&transformed);
+        let decoded = crate::entropy::huffman::decode(&huff_bytes, &table, transformed.len());
+
+        assert_eq!(transformed, decoded, "Huffman roundtrip bozuk");
+
+        let idx_back = u32::from_le_bytes([decoded[0], decoded[1], decoded[2], decoded[3]]) as usize;
+        let mtf_data = &decoded[4..];
+        let bwt_data = mtf::decode(mtf_data);
+        let recovered = bwt::decode(&bwt_data, idx_back);
+
+        assert_eq!(data, recovered, "BWT/MTF reverse bozuk");
+    }
+}
