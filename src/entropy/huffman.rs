@@ -68,112 +68,129 @@ fn package_merge(freq: &[u64; ALPHABET], max_len: usize) -> [u8; ALPHABET] {
         return out;
     }
 
-    let n = syms.len();
+    // Standart Huffman lengths al
+    let mut lengths = huffman_lengths(&syms, freq);
 
-    // Package-Merge: her item sadece weight taşır.
-    // Symbol membership'i AYRI bir Vec<Vec<u32>> ile takip et:
-    // sym_counts[level][sym_idx] = o level'da o sembol kaç item'da seçildi.
-    //
-    // Ama bu pahalı. Daha basit: canonical Package-Merge'de
-    // her level'da items listesi SADECE yapraklardan + önceki level paketlerinden oluşur.
-    // "Paket" = önceki level'dan alınan 2 item'ın birleşimi.
-    // Seçilen item sayısı = 2*(n-1).
-    // Her seçilen item için, içindeki yaprakların (orijinal semboller) listesini tut.
-    // Bir level'da sembol s'nin kaç seçili item'da geçtiği = o level'ın s'ye katkısı.
-    // Toplam katkı = code length.
-    //
-    // Kritik: bir paket içinde aynı sembol en fazla 1 kez geçmeli.
-    // Bu zaten garantili çünkü paket = 2 ayrı item'ın birleşimi,
-    // ve yapraklar tekil semboller.
-    // AMA: büyük paketler çok sembol içerebilir, ve bir level'da
-    // aynı sembol birden fazla seçili item'da geçebilir — bu normaldir ve
-    // counts bu şekilde birikir.
-
-    // Her item'ı (weight, leaf_set) olarak tut.
-    // leaf_set: syms index'leri kümesi — bool vec yerine sorted vec kullan,
-    // duplicate kontrolü için.
-
-    // Daha verimli: item'ları sadece weight ile tut,
-    // ve "hangi yaprakları içeriyor" bilgisini bit array ile sakla.
-    // n <= 256 olduğu için u128×2 = 256 bit yeterli, ama basitlik için
-    // [u64; 4] kullanalım (256 bit).
-
-    #[derive(Clone)]
-    struct Item {
-        weight: u64,
-        bits: [u64; 4], // 256-bit membership, bit i = syms[i] dahil
+    // Depth sınırı aşılmadıysa direkt kullan
+    if syms.iter().all(|&s| lengths[s] <= max_len as u8) {
+        return lengths;
     }
 
-    impl Item {
-        fn leaf(weight: u64, sym_idx: usize) -> Self {
-            let mut bits = [0u64; 4];
-            bits[sym_idx / 64] |= 1u64 << (sym_idx % 64);
-            Item { weight, bits }
-        }
+    // ── Length capping + Kraft rebalancing ──────────────────────────────────
+    // bzip2-style in-place fix:
+    //   1. max_len'i aşanları kırp
+    //   2. Kraft sum > 2^max_len ise: sembolleri uzunluk artan sırada uzat
+    //   3. Kraft sum < 2^max_len ise: sembolleri uzunluk azalan sırada kısalt
 
-        fn merge(a: &Item, b: &Item) -> Self {
-            Item {
-                weight: a.weight + b.weight,
-                bits: [
-                    a.bits[0] | b.bits[0],
-                    a.bits[1] | b.bits[1],
-                    a.bits[2] | b.bits[2],
-                    a.bits[3] | b.bits[3],
-                ],
-            }
+    // Adım 1: kırp
+    for &s in &syms {
+        if lengths[s] > max_len as u8 {
+            lengths[s] = max_len as u8;
         }
     }
 
-    let mut prev: Vec<Item> = Vec::new();
-    let mut counts = vec![0u32; n];
+    // Kraft sum helper — 2^max_len cinsinden (integer, taşma yok)
+    // sum(2^(max_len - len[s])) for active syms
+    let kraft = |lens: &[u8; ALPHABET]| -> i64 {
+        syms.iter()
+            .map(|&s| 1i64 << (max_len - lens[s] as usize))
+            .sum()
+    };
 
-    for _level in (1..=max_len).rev() {
-        let mut items: Vec<Item> = Vec::new();
+    let target = 1i64 << max_len;
 
-        // Yapraklar
-        for (i, &s) in syms.iter().enumerate() {
-            items.push(Item::leaf(freq[s], i));
-        }
+    // Adım 2: Kraft > target → bazı len'leri artır (en kısa önce, frekans düşük önce)
+    // Sırala: len artan, len eşitse freq azalan (daha az kullanılanı uzat)
+    {
+        let mut order: Vec<usize> = syms.clone();
+        order.sort_by(|&a, &b| {
+            lengths[a].cmp(&lengths[b])
+                .then(freq[b].cmp(&freq[a])) // eşit len'de: düşük freq önce uzasın
+        });
 
-        // Önceki level'dan paketler
-        let mut i = 0;
-        while i + 1 < prev.len() {
-            items.push(Item::merge(&prev[i], &prev[i + 1]));
-            i += 2;
-        }
-
-        // Weight'e göre sırala, en hafif 2*(n-1) seç
-        items.sort_by_key(|x| x.weight);
-        let take = 2 * (n - 1);
-        items.truncate(take);
-
-        // Bu level'ın katkısını say
-        // Bu level'da seçilen sembolleri bul (her sembol max 1 kez sayılır)
-        let mut level_bits = [0u64; 4];
-        for item in &items {
-            level_bits[0] |= item.bits[0];
-            level_bits[1] |= item.bits[1];
-            level_bits[2] |= item.bits[2];
-            level_bits[3] |= item.bits[3];
-        }
-        for word in 0..4 {
-            let mut w = level_bits[word];
-            while w != 0 {
-                let bit = w.trailing_zeros() as usize;
-                let sym_idx = word * 64 + bit;
-                if sym_idx < n {
-                    counts[sym_idx] += 1;
+        while kraft(&lengths) > target {
+            let mut extended = false;
+            for &s in &order {
+                if lengths[s] < max_len as u8 {
+                    lengths[s] += 1;
+                    extended = true;
+                    break;
                 }
-                w &= w - 1;
             }
+            if !extended { break; }
+            // order'ı güncelle (sadece length değişti)
+            order.sort_by(|&a, &b| {
+                lengths[a].cmp(&lengths[b])
+                    .then(freq[b].cmp(&freq[a]))
+            });
         }
-
-        prev = items;
     }
 
+    // Adım 3: Kraft < target → bazı len'leri azalt (en uzun önce, frekans yüksek önce)
+    {
+        let mut order: Vec<usize> = syms.clone();
+        order.sort_by(|&a, &b| {
+            lengths[b].cmp(&lengths[a])
+                .then(freq[b].cmp(&freq[a]))
+        });
+
+        while kraft(&lengths) < target {
+            let mut shortened = false;
+            for &s in &order {
+                if lengths[s] > 1 {
+                    lengths[s] -= 1;
+                    shortened = true;
+                    break;
+                }
+            }
+            if !shortened { break; }
+            order.sort_by(|&a, &b| {
+                lengths[b].cmp(&lengths[a])
+                    .then(freq[b].cmp(&freq[a]))
+            });
+        }
+    }
+
+    lengths
+}
+
+// Standart Huffman tree ile code length hesapla
+fn huffman_lengths(syms: &[usize], freq: &[u64; ALPHABET]) -> [u8; ALPHABET] {
+    use std::collections::BinaryHeap;
+    use std::cmp::Reverse;
+
+    // (weight, node_id)
+    // node_id < 256: yaprak (sembol)
+    // node_id >= 256: iç düğüm
+    let mut heap: BinaryHeap<Reverse<(u64, usize)>> = BinaryHeap::new();
+    for &s in syms {
+        heap.push(Reverse((freq[s], s)));
+    }
+
+    // parent[i] = i düğümünün ebeveyni
+    let mut parent = vec![usize::MAX; 512];
+    let mut next_node = 256usize;
+
+    while heap.len() > 1 {
+        let Reverse((w1, n1)) = heap.pop().unwrap();
+        let Reverse((w2, n2)) = heap.pop().unwrap();
+        let new_node = next_node;
+        next_node += 1;
+        parent[n1] = new_node;
+        parent[n2] = new_node;
+        heap.push(Reverse((w1 + w2, new_node)));
+    }
+
+    // Her yaprağın derinliğini hesapla
     let mut lengths = [0u8; ALPHABET];
-    for (i, &s) in syms.iter().enumerate() {
-        lengths[s] = counts[i] as u8;
+    for &s in syms {
+        let mut depth = 0u8;
+        let mut cur = s;
+        while parent[cur] != usize::MAX {
+            depth += 1;
+            cur = parent[cur];
+        }
+        lengths[s] = depth;
     }
     lengths
 }
@@ -468,5 +485,70 @@ mod tests {
             .sum();
         eprintln!("kraft = {}", kraft);
         assert!(max_l <= 16, "max length {} > 16", max_l);
+    }
+
+    #[test]
+    fn test_kennedy_huffman() {
+        let data = std::fs::read("../corpus/kennedy.xls")
+            .unwrap_or_else(|_| std::fs::read("corpus/kennedy.xls").unwrap());
+        let (encoded, table) = encode(&data);
+        eprintln!("original={} encoded={} ratio={:.1}%", 
+            data.len(), encoded.len(), 
+            encoded.len() as f64 / data.len() as f64 * 100.0);
+        let decoded = decode(&encoded, &table, data.len());
+        assert_eq!(data, decoded);
+    }
+
+    #[test]
+    fn test_kennedy_lengths() {
+        let data = std::fs::read("../corpus/kennedy.xls")
+            .unwrap_or_else(|_| std::fs::read("corpus/kennedy.xls").unwrap());
+        let mut freq = [0u64; 256];
+        for &b in &data { freq[b as usize] += 1; }
+
+        let syms_vec: Vec<usize> = (0..256).filter(|&i| freq[i] > 0).collect();
+        let std_lengths = huffman_lengths(&syms_vec, &freq);
+        let std_max = std_lengths.iter().copied().max().unwrap_or(0);
+        eprintln!("standart huffman max_depth={}", std_max);
+
+        let std_lengths = huffman_lengths(&syms_vec, &freq);
+        let std_max = std_lengths.iter().copied().max().unwrap_or(0);
+        eprintln!("standart huffman max_depth={}", std_max);
+
+
+        let lengths = package_merge(&freq, 16);
+        let min_l = lengths.iter().filter(|&&l| l > 0).copied().min().unwrap_or(0);
+        let max_l = lengths.iter().copied().max().unwrap_or(0);
+        eprintln!("min_length={} max_length={}", min_l, max_l);
+        eprintln!("active_symbols={}", lengths.iter().filter(|&&l| l > 0).count());
+        // İlk 10 sembolün freq ve length'ini göster
+        let mut pairs: Vec<(u64, u8, usize)> = (0..256)
+            .filter(|&i| freq[i] > 0)
+            .map(|i| (freq[i], lengths[i], i))
+            .collect();
+        pairs.sort_by(|a, b| b.0.cmp(&a.0));
+        for (f, l, s) in pairs.iter().take(10) {
+            eprintln!("sym={} freq={} length={}", s, f, l);
+        }
+    }
+
+    #[test]
+    fn test_alice_lengths() {
+        use crate::transforms::{bwt, mtf};
+        let data = std::fs::read("../corpus/alice29.txt")
+            .unwrap_or_else(|_| std::fs::read("corpus/alice29.txt").unwrap());
+        let bwt_result = bwt::encode(&data);
+        let idx = bwt_result.original_index as u32;
+        let mut transformed = Vec::new();
+        transformed.extend_from_slice(&idx.to_le_bytes());
+        transformed.extend(mtf::encode(&bwt_result.transformed));
+        
+        let mut freq = [0u64; 256];
+        for &b in &transformed { freq[b as usize] += 1; }
+        let syms: Vec<usize> = (0..256).filter(|&i| freq[i] > 0).collect();
+        let std_lengths = huffman_lengths(&syms, &freq);
+        let std_max = std_lengths.iter().copied().max().unwrap_or(0);
+        eprintln!("alice BWT+MTF sonrasi standart huffman max_depth={}", std_max);
+        eprintln!("active_symbols={}", syms.len());
     }
 }
