@@ -78,10 +78,8 @@ pub fn analyze(data: &[u8]) -> AnalysisResult {
         ContentType::Binary | ContentType::Unknown => {
             if entropy > 7.5 {
                 TransformPipeline::None
-            } else if bwt_score > 0.4 {
-                TransformPipeline::BwtMtf
             } else {
-                TransformPipeline::None
+                TransformPipeline::BwtMtf
             }
         }
     };
