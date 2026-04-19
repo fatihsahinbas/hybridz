@@ -51,7 +51,6 @@ pub fn analyze(data: &[u8]) -> AnalysisResult {
     let entropy = calculate_entropy(data);
     let delta_score = delta::suitability_score(data);
     let rle_score = rle::suitability_score(data);
-    let bwt_score = bwt::suitability_score(data);
     let text_ratio = text_byte_ratio(data);
 
     // İçerik tipi tahmini

@@ -7,7 +7,7 @@
 /// Lazy matching: pos'ta match bulduktan sonra pos+1'e de bak.
 /// Eğer pos+1 daha uzun match veriyorsa, pos'u literal yaz.
 
-use crate::lz::token::{Token, MIN_MATCH, MAX_MATCH, WINDOW_SIZE};
+use crate::lz::token::{Token, MIN_MATCH};
 use crate::lz::hash_chain::HashChain;
 
 pub struct LzEngine {

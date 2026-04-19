@@ -257,7 +257,7 @@ mod tests {
 
         let ans_out = crate::entropy::ans::encode(&transformed);
         let huff_out = {
-            let (hb, t) = crate::entropy::huffman::encode(&transformed);
+            let (hb, _) = crate::entropy::huffman::encode(&transformed);
             hb.len() + 256 // lengths overhead dahil
         };
 

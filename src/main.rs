@@ -1,4 +1,3 @@
-use hybridz::codec::{compress, decompress};
 use std::fs;
 use std::time::Instant;
 use std::env;
