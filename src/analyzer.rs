@@ -91,8 +91,6 @@ pub fn analyze(data: &[u8]) -> AnalysisResult {
     };
 
     // ← DEBUG SATIRI — buraya ekle
-    eprintln!("[DEBUG] text_ratio={:.3} rle={:.3} delta={:.3} bwt={:.3} entropy={:.3} → content={:?} pipeline={:?}",
-        text_ratio, rle_score, delta_score, bwt_score, entropy, content_type, pipeline);
 
     let compressibility = 1.0 - (entropy / 8.0);
 
@@ -134,8 +132,6 @@ pub fn apply_pipeline(data: &[u8], pipeline: &TransformPipeline) -> (Vec<u8>, u8
             let bwt_result = bwt::encode(data);
             let mut out = Vec::new();
             let idx = bwt_result.original_index as u32;
-            eprintln!("[DEBUG bwt] index={} transformed_ilk5={:?}", 
-                idx, &bwt_result.transformed[..5]);
             out.extend_from_slice(&idx.to_le_bytes());
             out.extend(mtf::encode(&bwt_result.transformed));
             (out, 0x04)
