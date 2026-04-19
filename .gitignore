@@ -18,3 +18,24 @@ Cargo.lock
 *.pdb
 
 # End of https://www.toptal.com/developers/gitignore/api/rust
+
+
+# Rust build artifacts
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Benchmark & comparison artifacts
+notepad.7z
+notepad.bz2
+notepad.gz
+notepad.*.out
+*_diff.txt
+bwt_test.txt
+
+# Editor/OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

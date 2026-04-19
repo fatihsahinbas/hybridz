@@ -2,5 +2,16 @@
 name = "hybridz"
 version = "0.1.0"
 edition = "2024"
+authors = ["Fatih Sahinbas"]
+description = "Content-adaptive hybrid compression library — analyzes data, selects the best transform + entropy coder pipeline"
+repository = "https://github.com/fatihsahinbas/hybridz"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["compression", "bwt", "huffman", "ans", "sa-is"]
+categories = ["compression", "algorithms"]
 
 [dependencies]
+
+[profile.release]
+lto = true
+codegen-units = 1
