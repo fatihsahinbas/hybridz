@@ -6,7 +6,7 @@
 /// Analoji: Bir şef malzemeye bakıp "bunu haşlayalım mı, kızartalım mı?"
 /// diye karar verir. Biz de veriye bakıp "BWT mi, Delta mı?" deriz.
 
-use crate::transforms::{delta, rle, bwt, mtf};
+use crate::transforms::{delta, rle, bwt, mtf,bcj};
 
 /// Veri tipi tahmini
 #[derive(Debug, Clone, PartialEq)]
@@ -22,6 +22,7 @@ pub enum ContentType {
 #[derive(Debug, Clone)]
 pub enum TransformPipeline {
     BwtMtf,         // Metin için: BWT → MTF
+    BcjBwtMtf,      // EXE/PE için: BCJ → BWT → MTF
     Delta,          // Sayısal için: Delta
     Rle,            // Çok tekrarlı için: RLE
     DeltaRle,       // Sayısal + tekrarlı: Delta → RLE
@@ -79,7 +80,12 @@ pub fn analyze(data: &[u8]) -> AnalysisResult {
             if entropy > 7.5 {
                 TransformPipeline::None
             } else {
-                TransformPipeline::BwtMtf
+                let bcj_score = bcj::suitability_score(data);
+                if bcj_score > 0.05 {
+                    TransformPipeline::BcjBwtMtf
+                } else {
+                    TransformPipeline::BwtMtf
+                }
             }
         }
     };
@@ -114,6 +120,16 @@ pub fn apply_pipeline(data: &[u8], pipeline: &TransformPipeline) -> (Vec<u8>, u8
             (rle::encode(&d), 0x03)
         }
 
+        TransformPipeline::BcjBwtMtf => {
+        let bcj_data = bcj::encode(data);
+        let bwt_result = bwt::encode(&bcj_data);
+        let mut out = Vec::new();
+        let idx = bwt_result.original_index as u32;
+        out.extend_from_slice(&idx.to_le_bytes());
+        out.extend(mtf::encode(&bwt_result.transformed));
+        (out, 0x06)
+        }
+
         TransformPipeline::BwtMtf => {
             let bwt_result = bwt::encode(data);
             let mut out = Vec::new();
@@ -145,6 +161,17 @@ pub fn reverse_pipeline(data: &[u8], pipeline_id: u8) -> Vec<u8> {
             let mtf_data = &data[4..];
             let bwt_data = mtf::decode(mtf_data);
             bwt::decode(&bwt_data, idx)
+        }
+
+        0x06 => {
+            if data.len() < 4 {
+                return data.to_vec();
+            }
+            let idx = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+            let mtf_data = &data[4..];
+            let bwt_data = mtf::decode(mtf_data);
+            let bcj_data = bwt::decode(&bwt_data, idx);
+            bcj::decode(&bcj_data)
         }
         _ => data.to_vec(),
     }
