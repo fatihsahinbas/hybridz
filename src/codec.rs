@@ -2,7 +2,7 @@ use crate::analyzer;
 use crate::entropy::huffman;
 
 // Format genel: [pipeline_id: 1B] [original_len: 4B LE] [lengths: 256B] [huffman_payload]
-// Format 0x08:  [pipeline_id: 1B] [compressed_payload...]   ← Huffman yok, DeIlv kendi sıkıştırır
+// Format 0x08:  [pipeline_id: 1B] [compressed_payload...]   ← DeIlv kendi sıkıştırır
 
 pub fn compress(data: &[u8]) -> Result<Vec<u8>, String> {
     if data.is_empty() {
@@ -44,11 +44,10 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>, String> {
         return Ok(Vec::new());
     }
 
-    // 0x08 = DeIlv: payload doğrudan decode_compressed'a gider
+    // 0x08 = DeIlv
     if pipeline_id == 0x08 {
         let payload = &data[1..];
-        let original = analyzer::reverse_pipeline(payload, pipeline_id);
-        return Ok(original);
+        return Ok(analyzer::reverse_pipeline(payload, pipeline_id));
     }
 
     if data.len() < 1 + 4 + 256 {
@@ -61,7 +60,6 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>, String> {
 
     let table = huffman::deserialize_table(lengths);
     let transformed = huffman::decode(compressed, &table, original_len);
-
     let original = analyzer::reverse_pipeline(&transformed, pipeline_id);
 
     Ok(original)
