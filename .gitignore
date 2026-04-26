@@ -39,3 +39,5 @@ bwt_test.txt
 *.swp
 .DS_Store
 Thumbs.db
+# Silesia corpus (too large for repo)
+corpus/silesia/
