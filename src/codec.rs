@@ -1,8 +1,17 @@
 use crate::analyzer;
 use crate::entropy::huffman;
+use crate::entropy::ans;
 
-// Format genel: [pipeline_id: 1B] [original_len: 4B LE] [lengths: 256B] [huffman_payload]
-// Format 0x08:  [pipeline_id: 1B] [compressed_payload...]   ← DeIlv kendi sıkıştırır
+// Pipeline ID tablosu:
+//   0x00 → None       + Huffman
+//   0x01 → Delta      + Huffman
+//   0x02 → RLE        + Huffman
+//   0x03 → DeltaRle   + Huffman
+//   0x04 → BwtMtf     + Huffman
+//   0x05 → BwtMtf     + ANS      ← ANS kazandığında
+//   0x06 → BcjBwtMtf  + Huffman
+//   0x07 → BcjBwtMtf  + ANS      ← ANS kazandığında
+//   0x08 → DeIlv      (kendi içinde sıkıştırılmış)
 
 pub fn compress(data: &[u8]) -> Result<Vec<u8>, String> {
     if data.is_empty() {
@@ -12,7 +21,7 @@ pub fn compress(data: &[u8]) -> Result<Vec<u8>, String> {
     let analysis = analyzer::analyze(data);
     let (transformed, pipeline_id) = analyzer::apply_pipeline(data, &analysis.pipeline);
 
-    // 0x08 = DeIlv: encode_compressed zaten sıkıştırdı, tekrar Huffman uygulanmaz
+    // 0x08 = DeIlv: encode_compressed zaten sıkıştırdı
     if pipeline_id == 0x08 {
         let mut output = Vec::with_capacity(1 + transformed.len());
         output.push(pipeline_id);
@@ -20,6 +29,34 @@ pub fn compress(data: &[u8]) -> Result<Vec<u8>, String> {
         return Ok(output);
     }
 
+    // BwtMtf (0x04) ve BcjBwtMtf (0x06) için ANS vs Huffman yarışması
+    if pipeline_id == 0x04 || pipeline_id == 0x06 {
+        let ans_bytes = ans::encode(&transformed);
+        let (huff_bytes, table) = huffman::encode(&transformed);
+
+        if ans_bytes.len() < huff_bytes.len() {
+            // ANS kazandı → pipeline_id + 1 (0x05 veya 0x07)
+            let ans_id = pipeline_id + 1;
+            let original_len = transformed.len() as u32;
+            let mut output = Vec::with_capacity(1 + 4 + ans_bytes.len());
+            output.push(ans_id);
+            output.extend_from_slice(&original_len.to_le_bytes());
+            output.extend_from_slice(&ans_bytes);
+            return Ok(output);
+        } else {
+            // Huffman kazandı → normal pipeline_id
+            let original_len = transformed.len() as u32;
+            let lengths = huffman::serialize_table(&table);
+            let mut output = Vec::with_capacity(1 + 4 + 256 + huff_bytes.len());
+            output.push(pipeline_id);
+            output.extend_from_slice(&original_len.to_le_bytes());
+            output.extend_from_slice(&lengths);
+            output.extend_from_slice(&huff_bytes);
+            return Ok(output);
+        }
+    }
+
+    // Diğer pipeline'lar: Huffman
     let original_len = transformed.len() as u32;
     let (huff_bytes, table) = huffman::encode(&transformed);
     let lengths = huffman::serialize_table(&table);
@@ -48,6 +85,20 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>, String> {
     if pipeline_id == 0x08 {
         let payload = &data[1..];
         return Ok(analyzer::reverse_pipeline(payload, pipeline_id));
+    }
+
+    // 0x05 = BwtMtf + ANS, 0x07 = BcjBwtMtf + ANS
+    if pipeline_id == 0x05 || pipeline_id == 0x07 {
+        if data.len() < 5 {
+            return Err("ANS header eksik".to_string());
+        }
+        let _original_len = u32::from_le_bytes([data[1], data[2], data[3], data[4]]) as usize;
+        let ans_payload = &data[5..];
+        let transformed = ans::decode(ans_payload)
+            .ok_or_else(|| "ANS decode başarısız".to_string())?;
+        // pipeline_id - 1 = Huffman versiyonu = reverse_pipeline'ın beklediği ID
+        let reverse_id = pipeline_id - 1;
+        return Ok(analyzer::reverse_pipeline(&transformed, reverse_id));
     }
 
     if data.len() < 1 + 4 + 256 {
