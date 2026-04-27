@@ -1,33 +1,27 @@
 /// Content Analyzer
-///
-/// Bir veri bloğunu hızlıca analiz ederek hangi transform pipeline'ının
-/// en iyi sonucu vereceğine karar verir.
-
 use crate::transforms::{delta, rle, bwt, mtf, deinterleave, bcj};
 
-/// Veri tipi tahmini
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContentType {
-    Text,       // UTF-8 metin, log, XML, JSON
-    Numeric,    // Sayısal seriler, sensör verisi, fiyat/stok
-    Binary,     // Genel binary, EXE, ZIP içeriği
-    Repetitive, // Çok tekrarlı (null buffer, sabit değer)
+    Text,
+    Numeric,
+    Binary,
+    Repetitive,
     Unknown,
 }
 
-/// Seçilen transform pipeline
 #[derive(Debug, Clone)]
 pub enum TransformPipeline {
-    BwtMtf,    // Metin için: BWT → MTF
-    BcjBwtMtf, // x86 binary için: BCJ → BWT → MTF
-    DeIlv,     // Sabit-kayıt binary için: De-interleave + sütun-bazlı Huffman
-    Delta,     // Sayısal için: Delta
-    Rle,       // Çok tekrarlı için: RLE
-    DeltaRle,  // Sayısal + tekrarlı: Delta → RLE
-    None,      // Transform faydasız
+    BwtMtf,
+    BwtMtfRle,
+    BcjBwtMtf,
+    DeIlv,
+    Delta,
+    Rle,
+    DeltaRle,
+    None,
 }
 
-/// Analiz sonucu
 pub struct AnalysisResult {
     pub content_type: ContentType,
     pub pipeline: TransformPipeline,
@@ -35,7 +29,6 @@ pub struct AnalysisResult {
     pub compressibility: f64,
 }
 
-/// Veri bloğunu analiz et ve transform kararı ver
 pub fn analyze(data: &[u8]) -> AnalysisResult {
     if data.is_empty() {
         return AnalysisResult {
@@ -52,7 +45,6 @@ pub fn analyze(data: &[u8]) -> AnalysisResult {
     let _bwt_score = bwt::suitability_score(data);
     let text_ratio = text_byte_ratio(data);
 
-    // İçerik tipi tahmini
     let content_type = if rle_score > 0.7 {
         ContentType::Repetitive
     } else if text_ratio > 0.85 {
@@ -63,7 +55,6 @@ pub fn analyze(data: &[u8]) -> AnalysisResult {
         ContentType::Binary
     };
 
-    // Pipeline kararı
     let pipeline = match &content_type {
         ContentType::Repetitive => TransformPipeline::Rle,
         ContentType::Text => TransformPipeline::BwtMtf,
@@ -75,8 +66,6 @@ pub fn analyze(data: &[u8]) -> AnalysisResult {
             }
         }
         ContentType::Binary | ContentType::Unknown => {
-            // Önce de-interleave detect — yüksek-entropi ama periyodik veri
-            // (sao, DICOM, sensor logs) için. entropy > 7.5 kontrolünden önce gelir.
             if deinterleave::detect_record_size(data).is_some() {
                 TransformPipeline::DeIlv
             } else if entropy > 7.5 {
@@ -92,6 +81,20 @@ pub fn analyze(data: &[u8]) -> AnalysisResult {
         }
     };
 
+    // BwtMtf seçildiyse: MTF sonrası RLE kazancını ölç
+    let pipeline = if let TransformPipeline::BwtMtf = pipeline {
+        let bwt_result = bwt::encode(data);
+        let mtf_out = mtf::encode(&bwt_result.transformed);
+        let rle_out = rle::encode(&mtf_out);
+        if rle_out.len() < mtf_out.len() {
+            TransformPipeline::BwtMtfRle
+        } else {
+            TransformPipeline::BwtMtf
+        }
+    } else {
+        pipeline
+    };
+
     let compressibility = 1.0 - (entropy / 8.0);
 
     AnalysisResult {
@@ -102,11 +105,6 @@ pub fn analyze(data: &[u8]) -> AnalysisResult {
     }
 }
 
-/// Seçilen pipeline'ı veriye uygula
-/// Döndürür: (transformed_data, pipeline_id_byte)
-///
-/// NOT: pipeline_id=0x08 (DeIlv) için dönen veri zaten sıkıştırılmıştır.
-/// codec.rs bu ID'yi görünce tekrar Huffman UYGULAMAZ.
 pub fn apply_pipeline(data: &[u8], pipeline: &TransformPipeline) -> (Vec<u8>, u8) {
     match pipeline {
         TransformPipeline::None => (data.to_vec(), 0x00),
@@ -129,6 +127,16 @@ pub fn apply_pipeline(data: &[u8], pipeline: &TransformPipeline) -> (Vec<u8>, u8
             (out, 0x04)
         }
 
+        TransformPipeline::BwtMtfRle => {
+            let bwt_result = bwt::encode(data);
+            let mut out = Vec::new();
+            let idx = bwt_result.original_index as u32;
+            out.extend_from_slice(&idx.to_le_bytes());
+            let mtf_out = mtf::encode(&bwt_result.transformed);
+            out.extend(rle::encode(&mtf_out));
+            (out, 0x09)
+        }
+
         TransformPipeline::BcjBwtMtf => {
             let bcj_data = bcj::encode(data);
             let bwt_result = bwt::encode(&bcj_data);
@@ -140,15 +148,12 @@ pub fn apply_pipeline(data: &[u8], pipeline: &TransformPipeline) -> (Vec<u8>, u8
         }
 
         TransformPipeline::DeIlv => {
-            // encode_compressed: de-interleave + sütun bazında Huffman
-            // Dönen veri zaten sıkıştırılmış — codec.rs tekrar Huffman uygulamayacak
             let record_size = deinterleave::detect_record_size(data).unwrap_or(28);
             (deinterleave::encode_compressed(data, record_size), 0x08)
         }
     }
 }
 
-/// Uygulanan pipeline'ı geri al (decode)
 pub fn reverse_pipeline(data: &[u8], pipeline_id: u8) -> Vec<u8> {
     match pipeline_id {
         0x00 => data.to_vec(),
@@ -173,13 +178,19 @@ pub fn reverse_pipeline(data: &[u8], pipeline_id: u8) -> Vec<u8> {
             let bcj_data = bwt::decode(&bwt_data, idx);
             bcj::decode(&bcj_data)
         }
-        // 0x08: DeIlv — encode_compressed ile sıkıştırılmış, decode_compressed ile aç
         0x08 => deinterleave::decode_compressed(data),
+        0x09 => {
+            if data.len() < 4 { return data.to_vec(); }
+            let idx = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+            let rle_data = &data[4..];
+            let mtf_data = rle::decode(rle_data);
+            let bwt_data = mtf::decode(&mtf_data);
+            bwt::decode(&bwt_data, idx)
+        }
         _ => data.to_vec(),
     }
 }
 
-/// Shannon entropy hesabı: 0.0 → 8.0
 fn calculate_entropy(data: &[u8]) -> f64 {
     let mut freq = [0u64; 256];
     for &b in data { freq[b as usize] += 1; }
@@ -190,7 +201,6 @@ fn calculate_entropy(data: &[u8]) -> f64 {
         .sum()
 }
 
-/// ASCII printable + boşluk oranı → metin mi değil mi?
 fn text_byte_ratio(data: &[u8]) -> f64 {
     let text_count = data
         .iter()
