@@ -41,3 +41,6 @@ bwt_test.txt
 Thumbs.db
 # Silesia corpus (too large for repo)
 corpus/silesia/
+
+silesia/
+silesia.zip
