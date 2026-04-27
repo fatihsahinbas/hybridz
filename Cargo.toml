@@ -11,7 +11,9 @@ keywords = ["compression", "bwt", "huffman", "ans", "sa-is"]
 categories = ["compression", "algorithms"]
 
 [dependencies]
+rayon = "1.12.0"
 
 [profile.release]
 lto = true
 codegen-units = 1
+rayon = "1.10"
