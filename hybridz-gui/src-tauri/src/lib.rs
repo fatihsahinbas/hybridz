@@ -10,6 +10,7 @@ pub struct CompressResult {
     pub speed_mb: f64,
     pub pipeline_id: u8,
     pub output_bytes: Vec<u8>,
+    pub original_ext: String,
 }
 
 #[derive(Serialize)]
@@ -50,43 +51,81 @@ fn derive_key(password: &[u8], salt: &[u8]) -> [u8; 32] {
     pbkdf2::<Hmac<Sha256>>(password, salt, 100_000, &mut key).expect("PBKDF2 hatasi");
     key
 }
+// .hz wrapper formatı v2:
+// [4 byte magic: 0x48 0x5A 0x32 0x00] [1 byte ext_len] [ext_len byte UTF-8 uzantı] [compress() çıktısı]
+// Eski format (magic yok): direkt compress() çıktısı — geriye dönük uyumlu
 
+const HZ_MAGIC: [u8; 4] = [0x48, 0x5A, 0x32, 0x00];
+
+fn wrap_with_ext(compressed: Vec<u8>, ext: &str) -> Vec<u8> {
+    let ext_bytes = ext.as_bytes();
+    let ext_len = ext_bytes.len().min(255) as u8;
+    let mut out = Vec::with_capacity(4 + 1 + ext_len as usize + compressed.len());
+    out.extend_from_slice(&HZ_MAGIC);
+    out.push(ext_len);
+    out.extend_from_slice(&ext_bytes[..ext_len as usize]);
+    out.extend(compressed);
+    out
+}
+
+fn unwrap_ext(data: &[u8]) -> (Vec<u8>, String) {
+    if data.len() >= 5 && data[..4] == HZ_MAGIC {
+        let ext_len = data[4] as usize;
+        let ext_end = 5 + ext_len;
+        if data.len() >= ext_end {
+            let ext = String::from_utf8_lossy(&data[5..ext_end]).to_string();
+            let payload = data[ext_end..].to_vec();
+            return (payload, ext);
+        }
+    }
+    // Eski format — uzantı yok
+    (data.to_vec(), String::new())
+}
 pub mod cmds {
     use super::*;
     use std::io::Read;
 
     #[tauri::command]
     pub fn compress_file(path: String) -> Result<CompressResult, String> {
+        let p = std::path::Path::new(&path);
+        let ext = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_string();
         let data = fs::read(&path).map_err(|e| e.to_string())?;
         let original_size = data.len();
         let t0 = Instant::now();
         let compressed = hybridz::compress(&data).map_err(|e| e.to_string())?;
         let elapsed = t0.elapsed();
-        let output_size = compressed.len();
-        let savings_pct = (1.0 - output_size as f64 / original_size as f64) * 100.0;
-        let speed_mb = original_size as f64 / 1_048_576.0 / elapsed.as_secs_f64();
         let pipeline_id = if compressed.is_empty() {
             0
         } else {
             compressed[0]
         };
+        let wrapped = wrap_with_ext(compressed, &ext);
+        let output_size = wrapped.len();
+        let savings_pct = (1.0 - output_size as f64 / original_size as f64) * 100.0;
+        let speed_mb = original_size as f64 / 1_048_576.0 / elapsed.as_secs_f64();
         Ok(CompressResult {
             original_size,
             output_size,
             savings_pct,
             speed_mb,
             pipeline_id,
-            output_bytes: compressed,
+            output_bytes: wrapped,
+            original_ext: ext,
         })
     }
 
     #[tauri::command]
     pub fn decompress_file(path: String) -> Result<CompressResult, String> {
-        let data = fs::read(&path).map_err(|e| e.to_string())?;
-        let original_size = data.len();
-        let pipeline_id = if data.is_empty() { 0 } else { data[0] };
+        let raw = fs::read(&path).map_err(|e| e.to_string())?;
+        let original_size = raw.len();
+        let (payload, ext) = unwrap_ext(&raw);
+        let pipeline_id = if payload.is_empty() { 0 } else { payload[0] };
         let t0 = Instant::now();
-        let decompressed = hybridz::decompress(&data).map_err(|e| e.to_string())?;
+        let decompressed = hybridz::decompress(&payload).map_err(|e| e.to_string())?;
         let elapsed = t0.elapsed();
         let output_size = decompressed.len();
         let savings_pct = (1.0 - original_size as f64 / output_size as f64) * 100.0;
@@ -98,6 +137,7 @@ pub mod cmds {
             speed_mb,
             pipeline_id,
             output_bytes: decompressed,
+            original_ext: ext,
         })
     }
 
@@ -204,6 +244,7 @@ pub mod cmds {
             speed_mb,
             pipeline_id,
             output_bytes: compressed,
+            original_ext: String::new(),
         })
     }
 
@@ -213,8 +254,9 @@ pub mod cmds {
     }
     #[tauri::command]
     pub fn decompress_to_file(src: String, dest: String) -> Result<(), String> {
-        let data = fs::read(&src).map_err(|e| e.to_string())?;
-        let decompressed = hybridz::decompress(&data).map_err(|e| e.to_string())?;
+        let raw = fs::read(&src).map_err(|e| e.to_string())?;
+        let (payload, _ext) = unwrap_ext(&raw);
+        let decompressed = hybridz::decompress(&payload).map_err(|e| e.to_string())?;
         fs::write(&dest, &decompressed).map_err(|e| e.to_string())
     }
 
@@ -324,6 +366,7 @@ pub mod cmds {
             speed_mb,
             pipeline_id: algo,
             output_bytes,
+            original_ext: String::new(),
         })
     }
 
@@ -373,6 +416,7 @@ pub mod cmds {
             speed_mb,
             pipeline_id: algo,
             output_bytes: decompressed,
+            original_ext: String::new(),
         })
     }
 

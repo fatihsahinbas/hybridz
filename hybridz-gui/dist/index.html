@@ -948,45 +948,57 @@
               if (encrypted) {
                 openDecryptModal();
               } else {
-                var suggestion = selectedFile
-                  .split(/[\\\/]/)
-                  .pop()
-                  .replace(/\.hz$/i, "");
-                var origName = prompt(
-                  "Kaydedilecek dosya adini uzantiyla girin:",
-                  suggestion,
-                );
-                if (!origName) return;
-                tDialog
-                  .save({ defaultPath: origName })
-                  .then(function (destPath) {
-                    if (!destPath) return;
-                    showProgress("Aciliyor...");
-                    invoke("decompress_to_file", {
-                      src: selectedFile,
-                      dest: destPath,
-                    })
-                      .then(function () {
-                        document
-                          .getElementById("resultPanel")
-                          .classList.add("visible");
-                        document.getElementById("resultIcon").textContent =
-                          "OK";
-                        document.getElementById("resultText").textContent =
-                          "Acma tamamlandi";
-                        document.getElementById("resultText").className =
-                          "status-text ok";
+                showProgress("Aciliyor...");
+                invoke("decompress_file", { path: selectedFile })
+                  .then(function (r) {
+                    hideProgress();
+                    var ext =
+                      r.original_ext && r.original_ext.length > 0
+                        ? "." + r.original_ext
+                        : "";
+                    var baseName = selectedFile
+                      .split(/[\\\/]/)
+                      .pop()
+                      .replace(/\.hz$/i, "");
+                    var suggestion = ext
+                      ? baseName.replace(/\.[^.]*$/, "") + ext
+                      : baseName;
+                    tDialog
+                      .save({ defaultPath: suggestion })
+                      .then(function (destPath) {
+                        if (!destPath) return;
+                        showProgress("Kaydediliyor...");
+                        invoke("save_bytes", {
+                          path: destPath,
+                          bytes: Array.from(r.output_bytes),
+                        })
+                          .then(function () {
+                            document
+                              .getElementById("resultPanel")
+                              .classList.add("visible");
+                            document.getElementById("resultIcon").textContent =
+                              "OK";
+                            document.getElementById("resultText").textContent =
+                              "Acma tamamlandi";
+                            document.getElementById("resultText").className =
+                              "status-text ok";
+                          })
+                          .catch(function (e) {
+                            showError(e);
+                          })
+                          .finally(function () {
+                            hideProgress();
+                          });
                       })
                       .catch(function (e) {
-                        showError(e);
-                      })
-                      .finally(function () {
-                        hideProgress();
+                        alert("Dialog hatasi: " + e);
                       });
                   })
                   .catch(function (e) {
-                    alert("Dialog hatasi: " + e);
+                    hideProgress();
+                    showError(e);
                   });
+                return;
               }
             })
             .catch(function (e) {
