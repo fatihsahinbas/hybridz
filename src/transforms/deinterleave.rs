@@ -152,7 +152,9 @@ pub fn detect_record_size(data: &[u8]) -> Option<usize> {
     }
 
     match best {
-        Some((rs, avg_e)) if raw_e - avg_e >= MIN_ENTROPY_DROP => Some(rs),
+        Some((rs, avg_e)) if raw_e - avg_e >= MIN_ENTROPY_DROP => {
+            Some(rs)
+        }
         _ => None,
     }
 }

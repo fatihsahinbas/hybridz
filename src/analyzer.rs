@@ -1,5 +1,5 @@
 /// Content Analyzer
-use crate::transforms::{delta, rle, bwt, mtf, deinterleave, bcj};
+use crate::transforms::{bcj, bwt, deinterleave, delta, mtf, rle};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContentType {
@@ -164,14 +164,18 @@ pub fn reverse_pipeline(data: &[u8], pipeline_id: u8) -> Vec<u8> {
             delta::decode(&rle_decoded)
         }
         0x04 => {
-            if data.len() < 4 { return data.to_vec(); }
+            if data.len() < 4 {
+                return data.to_vec();
+            }
             let idx = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
             let mtf_data = &data[4..];
             let bwt_data = mtf::decode(mtf_data);
             bwt::decode(&bwt_data, idx)
         }
         0x06 => {
-            if data.len() < 4 { return data.to_vec(); }
+            if data.len() < 4 {
+                return data.to_vec();
+            }
             let idx = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
             let mtf_data = &data[4..];
             let bwt_data = mtf::decode(mtf_data);
@@ -180,7 +184,9 @@ pub fn reverse_pipeline(data: &[u8], pipeline_id: u8) -> Vec<u8> {
         }
         0x08 => deinterleave::decode_compressed(data),
         0x09 => {
-            if data.len() < 4 { return data.to_vec(); }
+            if data.len() < 4 {
+                return data.to_vec();
+            }
             let idx = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
             let rle_data = &data[4..];
             let mtf_data = rle::decode(rle_data);
@@ -193,11 +199,16 @@ pub fn reverse_pipeline(data: &[u8], pipeline_id: u8) -> Vec<u8> {
 
 fn calculate_entropy(data: &[u8]) -> f64 {
     let mut freq = [0u64; 256];
-    for &b in data { freq[b as usize] += 1; }
+    for &b in data {
+        freq[b as usize] += 1;
+    }
     let len = data.len() as f64;
     freq.iter()
         .filter(|&&f| f > 0)
-        .map(|&f| { let p = f as f64 / len; -p * p.log2() })
+        .map(|&f| {
+            let p = f as f64 / len;
+            -p * p.log2()
+        })
         .sum()
 }
 
@@ -250,7 +261,11 @@ mod tests {
         let result = analyze(original);
         let (transformed, pipeline_id) = apply_pipeline(original, &result.pipeline);
         let recovered = reverse_pipeline(&transformed, pipeline_id);
-        assert_eq!(original.to_vec(), recovered, "Pipeline roundtrip başarısız!");
+        assert_eq!(
+            original.to_vec(),
+            recovered,
+            "Pipeline roundtrip başarısız!"
+        );
     }
 
     #[test]
