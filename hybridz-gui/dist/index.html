@@ -844,8 +844,14 @@
         }
 
         function setFile(path) {
-          selectedFile = path;
           var name = path.split(/[\\\/]/).pop();
+          if (name.toLowerCase().endsWith(".rar")) {
+            alert(
+              "RAR formatı desteklenmiyor. Dosyayı önce .zip veya .7z'ye dönüştürün.",
+            );
+            return;
+          }
+          selectedFile = path;
           document.getElementById("dropZone").classList.add("has-file");
           document.getElementById("dropLabel").textContent = name;
           var archive = isArchive(name);
