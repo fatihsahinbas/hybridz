@@ -1,6 +1,6 @@
 [package]
 name = "hybridz"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["Fatih Sahinbas <fatihsahinbas@gmail.com>"]
 description = "Content-adaptive hybrid compression library - analyzes data, selects the best transform + entropy coder pipeline"
