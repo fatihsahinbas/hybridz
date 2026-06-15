@@ -16,7 +16,7 @@
 use crate::entropy::huffman;
 
 /// Denenecek record boyutları
-pub const CANDIDATE_RECORDS: &[usize] = &[16, 24, 28, 32, 40, 48, 56, 64];
+pub const CANDIDATE_RECORDS: &[usize] = &[2, 4, 8, 16, 24, 28, 32, 40, 48, 56, 64];
 
 /// Encode: de-interleave + sütun bazında Huffman
 /// codec.rs bu çıktıya tekrar Huffman UYGULAMAZ (pipeline_id=0x08 özel dal)
@@ -152,9 +152,7 @@ pub fn detect_record_size(data: &[u8]) -> Option<usize> {
     }
 
     match best {
-        Some((rs, avg_e)) if raw_e - avg_e >= MIN_ENTROPY_DROP => {
-            Some(rs)
-        }
+        Some((rs, avg_e)) if raw_e - avg_e >= MIN_ENTROPY_DROP => Some(rs),
         _ => None,
     }
 }

@@ -1,6 +1,6 @@
+use std::env;
 use std::fs;
 use std::time::Instant;
-use std::env;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -66,7 +66,11 @@ fn cmd_bench(input_path: &str) {
 
     println!("=== HybridZ Benchmark ===");
     println!("Dosya       : {}", input_path);
-    println!("Girdi boyutu: {} byte ({:.1} KB)", data.len(), data.len() as f64 / 1024.0);
+    println!(
+        "Girdi boyutu: {} byte ({:.1} KB)",
+        data.len(),
+        data.len() as f64 / 1024.0
+    );
     println!();
 
     let t0 = Instant::now();
@@ -76,13 +80,17 @@ fn cmd_bench(input_path: &str) {
     });
     let compress_time = t0.elapsed();
 
-    let ratio         = compressed.len() as f64 / data.len() as f64 * 100.0;
-    let saved         = 100.0 - ratio;
+    let ratio = compressed.len() as f64 / data.len() as f64 * 100.0;
+    let saved = 100.0 - ratio;
     let bits_per_byte = compressed.len() as f64 * 8.0 / data.len() as f64;
-    let speed_mb      = data.len() as f64 / 1_048_576.0 / compress_time.as_secs_f64();
+    let speed_mb = data.len() as f64 / 1_048_576.0 / compress_time.as_secs_f64();
 
     println!("[ Sıkıştırma ]");
-    println!("  Çıktı   : {} byte ({:.1} KB)", compressed.len(), compressed.len() as f64 / 1024.0);
+    println!(
+        "  Çıktı   : {} byte ({:.1} KB)",
+        compressed.len(),
+        compressed.len() as f64 / 1024.0
+    );
     println!("  Oran    : {:.1}%  ({:.1}% tasarruf)", ratio, saved);
     println!("  Bit/byte: {:.3}", bits_per_byte);
     println!("  Süre    : {:.1?}", compress_time);
@@ -109,12 +117,65 @@ fn cmd_bench(input_path: &str) {
         println!("[ Roundtrip ] ❌ HATA!");
         for (i, (a, b)) in data.iter().zip(decompressed.iter()).enumerate() {
             if a != b {
-                println!("  İlk fark: byte {} → orijinal=0x{:02X}, açılan=0x{:02X}", i, a, b);
+                println!(
+                    "  İlk fark: byte {} → orijinal=0x{:02X}, açılan=0x{:02X}",
+                    i, a, b
+                );
                 break;
             }
         }
         if decompressed.len() != data.len() {
-            println!("  Boyut farkı: orijinal={}, açılan={}", data.len(), decompressed.len());
+            println!(
+                "  Boyut farkı: orijinal={}, açılan={}",
+                data.len(),
+                decompressed.len()
+            );
+        }
+    }
+
+    // Paralel karşılaştırma (sadece >1MB dosyalarda)
+    if data.len() > 1024 * 1024 {
+        println!();
+        println!("[ Paralel Sıkıştırma ]");
+        let tp0 = Instant::now();
+        let par_compressed = hybridz::parallel::compress(&data).unwrap_or_else(|e| {
+            eprintln!("Paralel sıkıştırma hatası: {}", e);
+            Vec::new()
+        });
+        let par_compress_time = tp0.elapsed();
+
+        if !par_compressed.is_empty() {
+            let par_ratio = par_compressed.len() as f64 / data.len() as f64 * 100.0;
+            let par_saved = 100.0 - par_ratio;
+            let par_speed = data.len() as f64 / 1_048_576.0 / par_compress_time.as_secs_f64();
+
+            println!(
+                "  Çıktı   : {} byte ({:.1} KB)",
+                par_compressed.len(),
+                par_compressed.len() as f64 / 1024.0
+            );
+            println!(
+                "  Oran    : {:.1}%  ({:.1}% tasarruf)",
+                par_ratio, par_saved
+            );
+            println!("  Süre    : {:.1?}", par_compress_time);
+            println!("  Hız     : {:.2} MB/s", par_speed);
+
+            let tp1 = Instant::now();
+            let par_decompressed =
+                hybridz::parallel::decompress(&par_compressed).unwrap_or_default();
+            let par_decompress_time = tp1.elapsed();
+            let par_dspeed = data.len() as f64 / 1_048_576.0 / par_decompress_time.as_secs_f64();
+            println!(
+                "  Açma    : {:.1?}  ({:.2} MB/s)",
+                par_decompress_time, par_dspeed
+            );
+
+            if par_decompressed == data {
+                println!("  Roundtrip: ✅");
+            } else {
+                println!("  Roundtrip: ❌ HATA!");
+            }
         }
     }
 }
@@ -135,8 +196,10 @@ fn cmd_corpus(dir_path: &str) {
 
     println!("=== HybridZ Canterbury Corpus ===");
     println!();
-    println!("{:<20} {:>8} {:>8} {:>7} {:>7} {:>6}",
-        "Dosya", "Orijinal", "Sıkışık", "Oran%", "Tasarruf", "RT");
+    println!(
+        "{:<20} {:>8} {:>8} {:>7} {:>7} {:>6}",
+        "Dosya", "Orijinal", "Sıkışık", "Oran%", "Tasarruf", "RT"
+    );
     println!("{}", "-".repeat(62));
 
     let mut total_orig = 0usize;
@@ -151,7 +214,9 @@ fn cmd_corpus(dir_path: &str) {
                 continue;
             }
         };
-        if data.is_empty() { continue; }
+        if data.is_empty() {
+            continue;
+        }
 
         let compressed = match hybridz::compress(&data) {
             Ok(c) => c,
@@ -169,12 +234,19 @@ fn cmd_corpus(dir_path: &str) {
             }
         };
 
-        let ratio   = compressed.len() as f64 / data.len() as f64 * 100.0;
-        let saved   = 100.0 - ratio;
+        let ratio = compressed.len() as f64 / data.len() as f64 * 100.0;
+        let saved = 100.0 - ratio;
         let rt_mark = if decompressed == data { "✅" } else { "❌" };
 
-        println!("{:<20} {:>8} {:>8} {:>6.1}% {:>6.1}%  {}",
-            name, data.len(), compressed.len(), ratio, saved, rt_mark);
+        println!(
+            "{:<20} {:>8} {:>8} {:>6.1}% {:>6.1}%  {}",
+            name,
+            data.len(),
+            compressed.len(),
+            ratio,
+            saved,
+            rt_mark
+        );
 
         total_orig += data.len();
         total_comp += compressed.len();
@@ -183,8 +255,10 @@ fn cmd_corpus(dir_path: &str) {
     println!("{}", "-".repeat(62));
     let total_ratio = total_comp as f64 / total_orig as f64 * 100.0;
     let total_saved = 100.0 - total_ratio;
-    println!("{:<20} {:>8} {:>8} {:>6.1}% {:>6.1}%",
-        "TOPLAM", total_orig, total_comp, total_ratio, total_saved);
+    println!(
+        "{:<20} {:>8} {:>8} {:>6.1}% {:>6.1}%",
+        "TOPLAM", total_orig, total_comp, total_ratio, total_saved
+    );
 }
 
 // ─── compress / decompress ───────────────────────────────────────────────────
@@ -209,8 +283,14 @@ fn cmd_compress(input_path: &str, output_path: &str) {
 
     let ratio = compressed.len() as f64 / data.len() as f64 * 100.0;
     let saved = 100.0 - ratio;
-    println!("Sıkıştırıldı: {} → {} byte ({:.1}%, {:.1}% tasarruf)  [{:.1?}]",
-        data.len(), compressed.len(), ratio, saved, elapsed);
+    println!(
+        "Sıkıştırıldı: {} → {} byte ({:.1}%, {:.1}% tasarruf)  [{:.1?}]",
+        data.len(),
+        compressed.len(),
+        ratio,
+        saved,
+        elapsed
+    );
 }
 
 fn cmd_decompress(input_path: &str, output_path: &str) {
@@ -231,6 +311,10 @@ fn cmd_decompress(input_path: &str, output_path: &str) {
         std::process::exit(1);
     });
 
-    println!("Açıldı: {} → {} byte  [{:.1?}]",
-        data.len(), decompressed.len(), elapsed);
+    println!(
+        "Açıldı: {} → {} byte  [{:.1?}]",
+        data.len(),
+        decompressed.len(),
+        elapsed
+    );
 }
