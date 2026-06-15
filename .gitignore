@@ -44,3 +44,7 @@ corpus/silesia/
 
 silesia/
 silesia.zip
+
+hybridz-gui/target/
+hybridz-gui/node_modules/
+hybridz-gui/.cargo/registry/
